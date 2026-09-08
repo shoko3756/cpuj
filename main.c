@@ -2,13 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include "cpuj1.h"
+#include "cpuj.h"
 #include "asm.h"
 #include "dbg.h"
 
 static void usage(const char *prog) {
     fprintf(stderr,
-        "cpuj1 — 8-bit virtual CPU (architecture v1)\n\n"
+        "cpuj — 16-bit virtual CPU\n\n"
         "usage:\n"
         "  %s <file.asm>              assemble and run\n"
         "  %s <file.asm> -d           assemble and run under debugger\n"
@@ -18,7 +18,6 @@ static void usage(const char *prog) {
         prog, prog, prog, prog, prog);
 }
 
-/* Read an entire text file into a malloc'd buffer. */
 static char *read_file(const char *path, long *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -50,8 +49,8 @@ int main(int argc, char **argv) {
 
     if (!path) { usage(argv[0]); return 1; }
 
-    cpuj1_t cpu;
-    cpuj1_init(&cpu);
+    cpuj_t cpu;
+    cpuj_init(&cpu);
 
     asm_result_t prog;
     bool have_prog = false;
@@ -60,8 +59,9 @@ int main(int argc, char **argv) {
         long len = 0;
         char *data = read_file(path, &len);
         if (!data) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+        if (len > CPUJ_RAM_SIZE) len = CPUJ_RAM_SIZE;
         for (long i = 0; i < len; i++)
-            cpuj1_mem_write(&cpu, (uint16_t)i, (uint8_t)data[i]);
+            cpuj_mem_write(&cpu, (uint16_t)i, (uint8_t)data[i]);
         free(data);
         printf("loaded %ld bytes of raw binary\n", len);
     } else {
@@ -76,14 +76,9 @@ int main(int argc, char **argv) {
         free(src);
         have_prog = true;
 
-        /* load words (big-endian) at successive addresses */
-        for (int i = 0; i < prog.count && prog.total_bytes + 1 < CPUJ1_RAM_SIZE; i++) {
-            int addr = i * 2;
-            cpuj1_mem_write(&cpu, (uint16_t)addr,        (uint8_t)(prog.words[i] >> 8));
-            cpuj1_mem_write(&cpu, (uint16_t)(addr + 1),  (uint8_t)(prog.words[i]));
-        }
-        printf("assembled %d instructions (%d bytes) from %s\n",
-               prog.count, prog.total_bytes, path);
+        for (int i = 0; i < prog.nbytes; i++)
+            cpuj_mem_write(&cpu, (uint16_t)i, prog.code[i]);
+        printf("assembled %d bytes from %s\n", prog.nbytes, path);
     }
 
     dbg_t dbg = { 0 };
@@ -92,15 +87,20 @@ int main(int argc, char **argv) {
         dbg_run(&cpu, have_prog ? &prog : NULL, &dbg);
     } else {
         long max_ticks = 1 << 20;
-        while (!cpu.halted && max_ticks-- > 0) {
-            if (have_prog && cpu.pc >= (uint16_t)prog.total_bytes) {
+        long ticks = 0;
+        while (!cpu.halted && ticks < max_ticks) {
+            if (have_prog && cpu.pc >= (uint16_t)prog.nbytes) {
                 cpu.halted = true;
                 break;
             }
-            cpuj1_tick(&cpu);
+            cpuj_tick(&cpu);
+            ticks++;
         }
         if (cpu.halted) {
-            printf("\ncpuj1 halted after %ld cycles.\n", (long)((1 << 20) - max_ticks));
+            if (ticks < max_ticks)
+                printf("\ncpuj halted after %ld cycles.\n", ticks);
+            else
+                printf("\ncpuj halted (max cycle limit).\n");
         } else {
             printf("runaway program — hit max cycle limit. use -d to debug.\n");
         }

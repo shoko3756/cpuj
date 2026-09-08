@@ -1,29 +1,27 @@
-#ifndef CPUJ1_DBG_H
-#define CPUJ1_DBG_H
+#ifndef CPUJ_DBG_H
+#define CPUJ_DBG_H
 
-#include "cpuj1.h"
+#include "cpuj.h"
 #include "asm.h"
 
 #define DBG_MAX_BREAKPOINTS 16
 
 typedef struct {
-    uint16_t breakpoints[DBG_MAX_BREAKPOINTS]; /* instruction addresses */
+    uint16_t breakpoints[DBG_MAX_BREAKPOINTS]; /* byte addresses */
     int      nbreak;
-    bool     verbose;   /* print executed instructions */
-    int      traps;     /* instruction count so far */
+    int      cycles;   /* cycle count since debugger started */
 } dbg_t;
 
-/* Run the debugger. `imem` is the assembled program (may be NULL).
- * Returns true if the program was stepped completely (no interactive
- * quit); false if the user aborted. */
-bool dbg_run(cpuj1_t *cpu, const asm_result_t *prog, dbg_t *dbg);
+/* Run the debugger. `prog` is the assembled program (may be NULL for
+ * raw-binary loads). Returns true if the program ran to completion,
+ * false if the user quit. */
+bool dbg_run(cpuj_t *cpu, const asm_result_t *prog, dbg_t *dbg);
 
-/* Non-interactive helpers shared with the repl */
 void dbg_add_breakpoint(dbg_t *dbg, uint16_t addr);
 bool dbg_remove_breakpoint(dbg_t *dbg, uint16_t addr);
-void dbg_print_state(const cpuj1_t *cpu);
-void dbg_print_regs(const cpuj1_t *cpu);
-void dbg_print_mem(const cpuj1_t *cpu, uint16_t from, uint16_t to);
-void dbg_print_insn(const cpuj1_t *cpu, uint16_t addr);
+void dbg_print_state(const cpuj_t *cpu);
+void dbg_print_regs(const cpuj_t *cpu);
+void dbg_print_mem(const cpuj_t *cpu, uint16_t from, uint16_t to);
+void dbg_print_insn(const cpuj_t *cpu, uint16_t addr);
 
-#endif /* CPUJ1_DBG_H */
+#endif /* CPUJ_DBG_H */

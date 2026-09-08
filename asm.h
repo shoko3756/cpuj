@@ -1,29 +1,28 @@
-#ifndef CPUJ1_ASM_H
-#define CPUJ1_ASM_H
+#ifndef CPUJ_ASM_H
+#define CPUJ_ASM_H
 
 #include <stdint.h>
 #include <stdbool.h>
 
-#define ASM_MAX_INSTR  2048   /* max instructions in one program */
 #define ASM_MAX_LABEL   64
 #define ASM_MAX_LABELS  256
+#define ASM_MAX_CODE    8192   /* max assembled program size in bytes */
 
 typedef struct {
     char name[ASM_MAX_LABEL];
-    uint16_t addr;  /* instruction address (byte offset) */
+    uint16_t addr;  /* byte address of the label */
 } asm_label_t;
 
 typedef struct {
-    uint16_t words[ASM_MAX_INSTR];
-    int      count;                 /* number of instructions assembled */
-    int      total_bytes;
+    uint8_t  code[ASM_MAX_CODE];
+    int      nbytes;
     asm_label_t labels[ASM_MAX_LABELS];
     int      nlabels;
     char     error[256];
 } asm_result_t;
 
-/* Assemble a text program into machine code.
+/* Assemble a text program into machine code (big-endian bytes).
  * Returns true on success; on failure populates asm_result.error. */
 bool asm_assemble(const char *source, asm_result_t *res);
 
-#endif /* CPUJ1_ASM_H */
+#endif /* CPUJ_ASM_H */

@@ -3,7 +3,7 @@
 loop:
     TRAP PRINT_REG
     SUB  R0, #1
-    JNE  @loop
+    JGE  @loop
 
 ; print a newline for good measure
     MOVI R0, #10
