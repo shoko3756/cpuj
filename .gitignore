@@ -1,0 +1,11 @@
+# build artifacts
+cpujvm
+/tmp/
+
+# task instructions
+itoc.txt
+
+# editor/OS noise
+*.o
+*.swp
+.DS_Store
