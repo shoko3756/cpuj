@@ -2,7 +2,7 @@ CC      := cc
 CFLAGS  := -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -g
 SRCS    := main.c cpuj.c asm.c dbg.c
 HDRS    := cpuj.h asm.h dbg.h
-TARGET  := cpujvm
+TARGET  := cpuj
 
 all: $(TARGET)
 

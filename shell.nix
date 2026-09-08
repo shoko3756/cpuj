@@ -12,6 +12,6 @@ pkgs.mkShell {
 
   shellHook = ''
     echo "cpuj dev shell — run 'make' to build, 'make test' to test"
-    echo "usage: ./cpujvm examples/count.asm"
+    echo "usage: ./cpuj examples/count.asm"
   '';
 }
