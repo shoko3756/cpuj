@@ -1,10 +1,13 @@
 CC      := cc
 CFLAGS  := -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -g
 SRCS    := main.c cpuj.c asm.c dbg.c
-HDRS    := cpuj.h asm.h dbg.h
+HDRS    := cpuj.h asm.h dbg.h sh_src.h
 TARGET  := cpuj
 
 all: $(TARGET)
+
+sh_src.h: sh.asm
+	python3 tools/mk_sh_src.py sh.asm > sh_src.h
 
 $(TARGET): $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS)

@@ -5,6 +5,7 @@
 #include "cpuj.h"
 #include "asm.h"
 #include "dbg.h"
+#include "sh_src.h"
 
 static void usage(const char *prog) {
     fprintf(stderr,
@@ -14,8 +15,9 @@ static void usage(const char *prog) {
         "  %s <file.asm> -d           assemble and run under debugger\n"
         "  %s <file.bin> -x           load raw binary and run\n"
         "  %s <file.bin> -x -d        load raw binary under debugger\n"
+        "  %s sh                      run the built-in shell\n"
         "  %s -h                      this help\n",
-        prog, prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog);
 }
 
 static char *read_file(const char *path, long *out_len) {
@@ -66,19 +68,27 @@ int main(int argc, char **argv) {
         printf("loaded %ld bytes of raw binary\n", len);
     } else {
         long len = 0;
-        char *src = read_file(path, &len);
-        if (!src) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+        const char *src = NULL;
+        bool embedded = false;
+        if (strcmp(path, "sh") == 0) {
+            src = (const char *)sh_src;
+            embedded = true;
+        } else {
+            char *f = read_file(path, &len);
+            if (!f) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+            src = f;
+        }
         if (!asm_assemble(src, &prog)) {
             fprintf(stderr, "assembly failed: %s\n", prog.error);
-            free(src);
+            if (!embedded) free((void *)src);
             return 1;
         }
-        free(src);
+        if (!embedded) free((void *)src);
         have_prog = true;
 
         for (int i = 0; i < prog.nbytes; i++)
             cpuj_mem_write(&cpu, (uint16_t)i, prog.code[i]);
-        printf("assembled %d bytes from %s\n", prog.nbytes, path);
+        printf("assembled %d bytes from %s\n", prog.nbytes, embedded ? "embedded sh" : path);
     }
 
     dbg_t dbg = { 0 };
