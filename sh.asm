@@ -559,6 +559,26 @@ sm_no:
     MOVI R3, #0x1300        ; "uname"
     CALL @streq
     JEQ @do_uname
+    ; "uname ..." — check the prefix outright
+    LD R0, [0x1400]
+    CMP R0, #0x75          ; 'u'
+    JNE @uname_no
+    LD R0, [0x1401]
+    CMP R0, #0x6E          ; 'n'
+    JNE @uname_no
+    LD R0, [0x1402]
+    CMP R0, #0x61          ; 'a'
+    JNE @uname_no
+    LD R0, [0x1403]
+    CMP R0, #0x6D          ; 'm'
+    JNE @uname_no
+    LD R0, [0x1404]
+    CMP R0, #0x65          ; 'e'
+    JNE @uname_no
+    LD R0, [0x1405]
+    CMP R0, #0x20          ; ' '
+    JEQ @do_uname
+uname_no:
 
     MOVI R2, #0x1400
     MOVI R3, #0x1310        ; "yes"
