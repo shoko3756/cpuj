@@ -13,9 +13,6 @@
 ;   0x12E0  "sm"        0x12F0 "ls"       0x1300 "uname"
 ;   0x1310  "yes"       0x1320 "say"      0x1330 "mem"
 ;   0x1340  "cpuj"      0x1350 "y\n"
-;   0x1353  uname part1 "cpuj computah 6.18.48 #1-NixOS "
-;   0x13B4  uname part2 "SMP PREEMPT_DYNAMIC Wed Sep 09 2026 "
-;   0x13D9  uname part3 "cpuj-16 GNU/cpuj"
 ;   0x1380  "sm: smoke test"
 ;   0x1390  "cpuj: unknown command '"     0x13B0 "'\n"
 ;   0x1400  input line buffer
@@ -443,184 +440,6 @@ main:
     MOVI R0, #0
     CALL @putc
 
-    MOVI R1, #0x1353        ; "cpuj computah 6.18.48 #1-NixOS "
-    MOVI R0, #0x63  ; c
-    CALL @putc
-    MOVI R0, #0x70  ; p
-    CALL @putc
-    MOVI R0, #0x75  ; u
-    CALL @putc
-    MOVI R0, #0x6A  ; j
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x63  ; c
-    CALL @putc
-    MOVI R0, #0x6F  ; o
-    CALL @putc
-    MOVI R0, #0x6D  ; m
-    CALL @putc
-    MOVI R0, #0x70  ; p
-    CALL @putc
-    MOVI R0, #0x75  ; u
-    CALL @putc
-    MOVI R0, #0x74  ; t
-    CALL @putc
-    MOVI R0, #0x61  ; a
-    CALL @putc
-    MOVI R0, #0x68  ; h
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x36  ; 6
-    CALL @putc
-    MOVI R0, #0x2E  ; .
-    CALL @putc
-    MOVI R0, #0x31  ; 1
-    CALL @putc
-    MOVI R0, #0x38  ; 8
-    CALL @putc
-    MOVI R0, #0x2E  ; .
-    CALL @putc
-    MOVI R0, #0x34  ; 4
-    CALL @putc
-    MOVI R0, #0x38  ; 8
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x23  ; #
-    CALL @putc
-    MOVI R0, #0x31  ; 1
-    CALL @putc
-    MOVI R0, #0x2D  ; -
-    CALL @putc
-    MOVI R0, #0x4E  ; N
-    CALL @putc
-    MOVI R0, #0x69  ; i
-    CALL @putc
-    MOVI R0, #0x78  ; x
-    CALL @putc
-    MOVI R0, #0x4F  ; O
-    CALL @putc
-    MOVI R0, #0x53  ; S
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0
-    CALL @putc
-
-    MOVI R1, #0x13B4        ; "SMP PREEMPT_DYNAMIC Wed Sep 09 2026 "
-    MOVI R0, #0x53  ; S
-    CALL @putc
-    MOVI R0, #0x4D  ; M
-    CALL @putc
-    MOVI R0, #0x50  ; P
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x50  ; P
-    CALL @putc
-    MOVI R0, #0x52  ; R
-    CALL @putc
-    MOVI R0, #0x45  ; E
-    CALL @putc
-    MOVI R0, #0x45  ; E
-    CALL @putc
-    MOVI R0, #0x4D  ; M
-    CALL @putc
-    MOVI R0, #0x50  ; P
-    CALL @putc
-    MOVI R0, #0x54  ; T
-    CALL @putc
-    MOVI R0, #0x5F  ; _
-    CALL @putc
-    MOVI R0, #0x44  ; D
-    CALL @putc
-    MOVI R0, #0x59  ; Y
-    CALL @putc
-    MOVI R0, #0x4E  ; N
-    CALL @putc
-    MOVI R0, #0x41  ; A
-    CALL @putc
-    MOVI R0, #0x4D  ; M
-    CALL @putc
-    MOVI R0, #0x49  ; I
-    CALL @putc
-    MOVI R0, #0x43  ; C
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x57  ; W
-    CALL @putc
-    MOVI R0, #0x65  ; e
-    CALL @putc
-    MOVI R0, #0x64  ; d
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x53  ; S
-    CALL @putc
-    MOVI R0, #0x65  ; e
-    CALL @putc
-    MOVI R0, #0x70  ; p
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x30  ; 0
-    CALL @putc
-    MOVI R0, #0x39  ; 9
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x32  ; 2
-    CALL @putc
-    MOVI R0, #0x30  ; 0
-    CALL @putc
-    MOVI R0, #0x32  ; 2
-    CALL @putc
-    MOVI R0, #0x36  ; 6
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0
-    CALL @putc
-
-    MOVI R1, #0x13D9        ; "cpuj-16 GNU/cpuj"
-    MOVI R0, #0x63  ; c
-    CALL @putc
-    MOVI R0, #0x70  ; p
-    CALL @putc
-    MOVI R0, #0x75  ; u
-    CALL @putc
-    MOVI R0, #0x6A  ; j
-    CALL @putc
-    MOVI R0, #0x2D  ; -
-    CALL @putc
-    MOVI R0, #0x31  ; 1
-    CALL @putc
-    MOVI R0, #0x36  ; 6
-    CALL @putc
-    MOVI R0, #0x20  ; ' '
-    CALL @putc
-    MOVI R0, #0x47  ; G
-    CALL @putc
-    MOVI R0, #0x4E  ; N
-    CALL @putc
-    MOVI R0, #0x55  ; U
-    CALL @putc
-    MOVI R0, #0x2F  ; /
-    CALL @putc
-    MOVI R0, #0x63  ; c
-    CALL @putc
-    MOVI R0, #0x70  ; p
-    CALL @putc
-    MOVI R0, #0x75  ; u
-    CALL @putc
-    MOVI R0, #0x6A  ; j
-    CALL @putc
-    MOVI R0, #0
-    CALL @putc
-
     MOVI R1, #0x1380        ; "sm: smoke test"
     MOVI R0, #0x73  ; s
     CALL @putc
@@ -741,26 +560,6 @@ sm_no:
     MOVI R3, #0x1300        ; "uname"
     CALL @streq
     JEQ @do_uname
-    ; "uname ..." — check the prefix outright
-    LD R0, [0x1400]
-    CMP R0, #0x75          ; 'u'
-    JNE @uname_no
-    LD R0, [0x1401]
-    CMP R0, #0x6E          ; 'n'
-    JNE @uname_no
-    LD R0, [0x1402]
-    CMP R0, #0x61          ; 'a'
-    JNE @uname_no
-    LD R0, [0x1403]
-    CMP R0, #0x6D          ; 'm'
-    JNE @uname_no
-    LD R0, [0x1404]
-    CMP R0, #0x65          ; 'e'
-    JNE @uname_no
-    LD R0, [0x1405]
-    CMP R0, #0x20          ; ' '
-    JEQ @do_uname
-uname_no:
 
     MOVI R2, #0x1400
     MOVI R3, #0x1310        ; "yes"
@@ -907,23 +706,6 @@ do_ls:
     JMP @shell_loop
 
 do_uname:
-    ; "uname -a" prints the full line, anything else just the name
-    LD R0, [0x1406]
-    CMP R0, #0x2D          ; '-'
-    JNE @uname_name
-    LD R0, [0x1407]
-    CMP R0, #0x61          ; 'a'
-    JNE @uname_name
-    MOVI R0, #0x1353        ; "cpuj computah 6.18.48 #1-NixOS "
-    TRAP PRINT_STR
-    MOVI R0, #0x13B4        ; "SMP PREEMPT_DYNAMIC Wed Sep 09 2026 "
-    TRAP PRINT_STR
-    MOVI R0, #0x13D9        ; "cpuj-16 GNU/cpuj"
-    TRAP PRINT_STR
-    MOVI R0, #10
-    TRAP PRINT_CHAR
-    JMP @shell_loop
-uname_name:
     MOVI R0, #0x1340        ; "cpuj"
     TRAP PRINT_STR
     MOVI R0, #10
