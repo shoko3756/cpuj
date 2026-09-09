@@ -1,4 +1,4 @@
-; sh.asm — a tiny shell that runs on the cpuj VM
+; sh.asm — a tiny shell that runs on the cpuj VM (32-bit ISA)
 ;
 ; builtins:  help   echo <text>   count   regs   exit   quit
 ;            sm     ls   uname   yes   say <text>   mem
@@ -17,15 +17,16 @@
 ;   0x1390  "cpuj: unknown command '"     0x13B0 "'\n"
 ;   0x1400  input line buffer
 ;
-; registers: R0/R1 scratch, R2/R3 string compare, R4/R5 streq scratch
+; registers: R0/R1 scratch, R2/R3 string compare, R4/R5 streq scratch,
+;            R6 = input line buffer base (0x1400)
 
 ; ── start: jump to the shell entry point ─────────────────────────────
     JMP @main
 
 ; ── putc: write R0 to [R1], then R1++ ────────────────────────────────
 putc:
-    ST [R1], R0
-    ADD R1, #1
+    STB [R1], R0
+    ADDI R1, #1
     RET
 
 ; ── streq: compare string at R2 with string at R3 ────────────────────
@@ -34,14 +35,14 @@ streq:
     PUSH R4
     PUSH R5
 strcmp_loop:
-    LD R4, [R2]
-    LD R5, [R3]
+    LDB R4, [R2]
+    LDB R5, [R3]
     CMP R4, R5
     JNE @strcmp_ne
     CMP R4, #0
     JEQ @strcmp_eq
-    ADD R2, #1
-    ADD R3, #1
+    ADDI R2, #1
+    ADDI R3, #1
     JMP @strcmp_loop
 strcmp_ne:
     POP R5
@@ -64,12 +65,12 @@ read_loop:
     JEQ @read_done
     CMP R0, #13             ; '\r' — ignore
     JEQ @read_loop
-    ST [R2], R0
-    ADD R2, #1
+    STB [R2], R0
+    ADDI R2, #1
     JMP @read_loop
 read_done:
     MOVI R0, #0
-    ST [R2], R0
+    STB [R2], R0
     MOVI R3, #0
     RET
 read_eof:
@@ -180,7 +181,7 @@ main:
     MOVI R0, #0
     CALL @putc
 
-    MOVI R1, #0x1280        ; "commands: help echo count regs exit sm"
+    MOVI R1, #0x1280        ; "commands: help echo count regs exit sm ls uname yes say mem"
     MOVI R0, #0x63  ; c
     CALL @putc
     MOVI R0, #0x6F  ; o
@@ -480,6 +481,8 @@ main:
 
 ; ── main loop ────────────────────────────────────────────────────────
 
+    MOVI R6, #0x1400        ; line buffer base for peek loads
+
 shell_loop:
     MOVI R0, #0x1200        ; prompt "$ "
     TRAP PRINT_STR
@@ -488,7 +491,7 @@ shell_loop:
     CMP R3, #1              ; EOF?
     JEQ @eof
 
-    LD R0, [0x1400]         ; skip empty lines
+    LDB R0, [R6]            ; skip empty lines
     CMP R0, #0
     JEQ @shell_loop
 
@@ -502,19 +505,19 @@ shell_loop:
     CALL @streq
     JEQ @do_echo
     ; "echo <text>" — check the prefix outright
-    LD R0, [0x1400]
+    LDB R0, [R6+0]
     CMP R0, #0x65          ; 'e'
     JNE @echo_no
-    LD R0, [0x1401]
+    LDB R0, [R6+1]
     CMP R0, #0x63          ; 'c'
     JNE @echo_no
-    LD R0, [0x1402]
+    LDB R0, [R6+2]
     CMP R0, #0x68          ; 'h'
     JNE @echo_no
-    LD R0, [0x1403]
+    LDB R0, [R6+3]
     CMP R0, #0x6F          ; 'o'
     JNE @echo_no
-    LD R0, [0x1404]
+    LDB R0, [R6+4]
     CMP R0, #0x20          ; ' '
     JEQ @do_echo
 echo_no:
@@ -540,13 +543,13 @@ echo_no:
     JEQ @do_exit
 
     ; "sm" — smoke test only
-    LD R0, [0x1400]
+    LDB R0, [R6+0]
     CMP R0, #0x73          ; 's'
     JNE @sm_no
-    LD R0, [0x1401]
+    LDB R0, [R6+1]
     CMP R0, #0x6D          ; 'm'
     JNE @sm_no
-    LD R0, [0x1402]
+    LDB R0, [R6+2]
     CMP R0, #0             ; end of "sm"
     JEQ @do_sm
 sm_no:
@@ -576,16 +579,16 @@ sm_no:
     CALL @streq
     JEQ @do_say
     ; "say <text>" — check the prefix outright
-    LD R0, [0x1400]
+    LDB R0, [R6+0]
     CMP R0, #0x73          ; 's'
     JNE @say_no
-    LD R0, [0x1401]
+    LDB R0, [R6+1]
     CMP R0, #0x61          ; 'a'
     JNE @say_no
-    LD R0, [0x1402]
+    LDB R0, [R6+2]
     CMP R0, #0x79          ; 'y'
     JNE @say_no
-    LD R0, [0x1403]
+    LDB R0, [R6+3]
     CMP R0, #0x20          ; ' '
     JEQ @do_say
 say_no:
@@ -611,16 +614,16 @@ do_help:
 do_echo:
     MOVI R2, #0x1400
 echo_scan:
-    LD R0, [R2]
+    LDB R0, [R2]
     CMP R0, #0
     JEQ @echo_nl
     CMP R0, #32             ; space
     JEQ @echo_start
-    ADD R2, #1
+    ADDI R2, #1
     JMP @echo_scan
 echo_start:
-    ADD R2, #1
-    LD R0, [R2]
+    ADDI R2, #1
+    LDB R0, [R2]
     CMP R0, #32
     JEQ @echo_start
     CMP R0, #0
@@ -728,11 +731,11 @@ do_mem:
     MOVI R1, #0x1200
     MOVI R5, #16             ; bytes to dump
 do_mem_loop:
-    LD R0, [R1]
+    LDB R0, [R1]
     CALL @hex_byte
     MOVI R0, #0x20           ; ' '
     TRAP PRINT_CHAR
-    ADD R1, #1
+    ADDI R1, #1
     SUB R5, #1
     JNE @do_mem_loop
     MOVI R0, #10
@@ -743,7 +746,7 @@ do_mem_loop:
 
 hex_byte:
     PUSH R0
-    SHR R0, #4
+    SHRI R0, #4
     AND R0, #0xF
     CALL @hex_char
     POP R0

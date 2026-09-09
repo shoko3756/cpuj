@@ -1,13 +1,21 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include "cpuj.h"
 
 /* ── Init / reset ─────────────────────────────────────────────────── */
 
-void cpuj_init(cpuj_t *cpu) {
-    memset(cpu->ram, 0, CPUJ_RAM_SIZE);
+bool cpuj_init(cpuj_t *cpu) {
+    cpu->ram = (uint8_t *)calloc(1, CPUJ_RAM_SIZE);
+    if (!cpu->ram) return false;
     cpuj_reset(cpu);
+    return true;
+}
+
+void cpuj_free(cpuj_t *cpu) {
+    free(cpu->ram);
+    cpu->ram = NULL;
 }
 
 void cpuj_reset(cpuj_t *cpu) {
@@ -21,93 +29,94 @@ void cpuj_reset(cpuj_t *cpu) {
 
 /* ── Memory ───────────────────────────────────────────────────────── */
 
-void cpuj_mem_write(cpuj_t *cpu, uint16_t addr, uint8_t val) {
+void cpuj_mem_write(cpuj_t *cpu, uint32_t addr, uint8_t val) {
     cpu->ram[addr] = val;
 }
 
-uint8_t cpuj_mem_read(cpuj_t *cpu, uint16_t addr) {
+uint8_t cpuj_mem_read(cpuj_t *cpu, uint32_t addr) {
     return cpu->ram[addr];
 }
 
-void cpuj_push16(cpuj_t *cpu, uint16_t val) {
-    if (cpu->sp < CPUJ_STACK_BOTTOM + 1) return;
-    cpuj_mem_write(cpu, cpu->sp--, (uint8_t)(val >> 8));
-    cpuj_mem_write(cpu, cpu->sp--, (uint8_t)val);
-    /* SP now points at the low byte below the pushed word */
+/* Words are big-endian: msb byte at the lowest address. */
+void cpuj_mem_write32(cpuj_t *cpu, uint32_t addr, uint32_t val) {
+    cpu->ram[addr]     = (uint8_t)(val >> 24);
+    cpu->ram[addr + 1] = (uint8_t)(val >> 16);
+    cpu->ram[addr + 2] = (uint8_t)(val >> 8);
+    cpu->ram[addr + 3] = (uint8_t)val;
 }
 
-uint16_t cpuj_pop16(cpuj_t *cpu) {
-    if (cpu->sp + 2 > CPUJ_STACK_TOP) return 0;
-    uint8_t lo = cpuj_mem_read(cpu, ++cpu->sp);
-    uint8_t hi = cpuj_mem_read(cpu, ++cpu->sp);
-    return ((uint16_t)hi << 8) | lo;
+uint32_t cpuj_mem_read32(cpuj_t *cpu, uint32_t addr) {
+    return ((uint32_t)cpu->ram[addr]     << 24) |
+           ((uint32_t)cpu->ram[addr + 1] << 16) |
+           ((uint32_t)cpu->ram[addr + 2] << 8)  |
+           ((uint32_t)cpu->ram[addr + 3]);
+}
+
+/* Stack grows down from 0xFFFFFFF0; push pre-decrements by 4,
+ * pop post-increments by 4. */
+void cpuj_push(cpuj_t *cpu, uint32_t val) {
+    if (cpu->sp < 4) return;
+    cpu->sp -= 4;
+    cpuj_mem_write32(cpu, cpu->sp, val);
+}
+
+uint32_t cpuj_pop(cpuj_t *cpu) {
+    if (cpu->sp >= CPUJ_STACK_TOP) return 0;
+    uint32_t val = cpuj_mem_read32(cpu, cpu->sp);
+    cpu->sp += 4;
+    return val;
 }
 
 /* ── ALU ───────────────────────────────────────────────────────────── */
 
-uint16_t cpuj_alu(cpuj_t *cpu, int op, uint16_t a, uint16_t b) {
-    uint16_t res = 0;
+uint32_t cpuj_alu(cpuj_t *cpu, int op, uint32_t a, uint32_t b) {
+    uint32_t res = 0;
     bool carry = false, overflow = false;
 
     switch (op) {
         case OP_ADD: {
-            uint32_t sum = (uint32_t)a + b;
-            res    = (uint16_t)sum;
-            carry  = sum > 0xFFFF;
-            overflow = ((a & 0x8000) == (b & 0x8000)) &&
-                       ((res & 0x8000) != (a & 0x8000));
+            uint64_t sum = (uint64_t)a + b;
+            res    = (uint32_t)sum;
+            carry  = sum > 0xFFFFFFFFULL;
+            overflow = ((a & 0x80000000) == (b & 0x80000000)) &&
+                       ((res & 0x80000000) != (a & 0x80000000));
             break;
         }
         case OP_SUB:
         case OP_CMP: {
             carry = a < b;
-            res   = (uint16_t)(a - b);
-            overflow = ((a & 0x8000) != (b & 0x8000)) &&
-                       ((res & 0x8000) != (a & 0x8000));
+            res   = a - b;
+            overflow = ((a & 0x80000000) != (b & 0x80000000)) &&
+                       ((res & 0x80000000) != (a & 0x80000000));
             break;
         }
         case OP_AND:  res = a & b; break;
         case OP_OR:   res = a | b; break;
         case OP_XOR:  res = a ^ b; break;
-        case OP_NOT:  res = (uint16_t)~a; break;
-        case OP_SHL:  res = (uint16_t)(a << (b & 15)); break;
-        case OP_SHR:  res = (uint16_t)(a >> (b & 15)); break;
+        case OP_NOT:  res = ~a; break;
+        case OP_SHL:  res = a << (b & 31); break;
+        case OP_SHR:  res = a >> (b & 31); break;
         default:      return a;
     }
 
     uint8_t f = 0;
-    if (res == 0)       f |= CPUJ_FLAG_Z;
-    if (carry)          f |= CPUJ_FLAG_C;
-    if (res & 0x8000)   f |= CPUJ_FLAG_N;
-    if (overflow)       f |= CPUJ_FLAG_V;
+    if (res == 0)            f |= CPUJ_FLAG_Z;
+    if (carry)               f |= CPUJ_FLAG_C;
+    if (res & 0x80000000)    f |= CPUJ_FLAG_N;
+    if (overflow)            f |= CPUJ_FLAG_V;
     cpu->flags = f;
     return res;
 }
 
 /* ── Fetch ─────────────────────────────────────────────────────────── */
 
-/* Word is read big-endian (high byte first). Returns a uint32 holding
- * word1 in bits 16-31; if the instruction is long, word2 in bits 0-15.
- * Advance PC by the instruction length (2 or 4 bytes). */
-static uint32_t cpuj_fetch(cpuj_t *cpu) {
-    uint16_t addr = cpu->pc;
-    uint16_t w1hi = cpuj_mem_read(cpu, addr);
-    uint16_t w1lo = cpuj_mem_read(cpu, addr + 1);
-    uint16_t word1 = (uint16_t)((w1hi << 8) | w1lo);
-
-    uint32_t instr = (uint32_t)word1 << 16;
-
-    int imm6 = word1 & 0x3F;
-    if (imm6 == IMM_LONG) {
-        uint16_t w2hi = cpuj_mem_read(cpu, addr + 2);
-        uint16_t w2lo = cpuj_mem_read(cpu, addr + 3);
-        uint16_t word2 = (uint16_t)((w2hi << 8) | w2lo);
-        instr |= word2;
-        cpu->pc += 4;
-    } else {
-        cpu->pc += 2;
-    }
-    return instr;
+/* Fetch one fixed 32-bit instruction (4 bytes, big-endian) and advance
+ * PC by 4. */
+uint32_t cpuj_fetch(cpuj_t *cpu) {
+    uint32_t addr = cpu->pc;
+    uint32_t ins  = cpuj_mem_read32(cpu, addr);
+    cpu->pc += 4;
+    return ins;
 }
 
 /* ── Trap ──────────────────────────────────────────────────────────── */
@@ -124,13 +133,13 @@ void cpuj_trap(cpuj_t *cpu, int code) {
             break;
         case TRAP_READ_CHAR: {
             int c = getchar();
-            cpu->r[0] = (c == EOF) ? 0 : (uint16_t)(c & 0xFF);
+            cpu->r[0] = (c == EOF) ? 0 : (uint32_t)(c & 0xFF);
             break;
         }
         case TRAP_PRINT_STR: {
             uint32_t p = cpu->r[0];
-            while (p < CPUJ_RAM_SIZE) {
-                uint8_t ch = cpuj_mem_read(cpu, (uint16_t)p);
+            for (;;) {
+                uint8_t ch = cpuj_mem_read(cpu, p);
                 if (ch == 0) break;
                 putchar(ch);
                 p++;
@@ -164,103 +173,106 @@ static bool branch_taken(cpuj_t *cpu, int cond) {
 
 /* ── Execute ───────────────────────────────────────────────────────── */
 
-void cpuj_execute(cpuj_t *cpu, uint32_t instr) {
-    int op = CPUJ_OP(instr);
-    int rd = CPUJ_RD(instr);
-    int rs = CPUJ_RS(instr);
-    int imm = CPUJ_IMM(instr);
-    int16_t reldisp = (int16_t)((imm < 32) ? imm : imm - 64); /* signed 6-bit */
-    bool islong = (imm == IMM_LONG);
-    uint16_t wide = CPUJ_WIDE(instr);
+static void do_alu(cpuj_t *cpu, int op, int rd, uint32_t b) {
+    uint32_t res = cpuj_alu(cpu, op, cpu->r[rd], b);
+    if (op != OP_CMP)
+        cpu->r[rd] = res;
+}
+
+void cpuj_execute(cpuj_t *cpu, uint32_t ins) {
+    int op  = CPUJ_OP(ins);
+    int rd  = CPUJ_RD(ins);
+    int rs  = CPUJ_RS(ins);
+    int32_t simm = CPUJ_SIMM(ins);
 
     switch (op) {
         case OP_MOV:
-            if (islong)
-                cpu->r[rd] = wide;
-            else
-                cpu->r[rd] = cpu->r[rs];
+            cpu->r[rd] = cpu->r[rs];
             break;
 
-        case OP_ADD: case OP_SUB: case OP_AND:
-        case OP_OR:  case OP_XOR: case OP_CMP: {
-            uint16_t src = islong ? wide : cpu->r[rs];
-            uint16_t res = cpuj_alu(cpu, op, cpu->r[rd], src);
-            if (op != OP_CMP)
-                cpu->r[rd] = res;
+        case OP_MOVI:
+            cpu->r[rd] = CPUJ_IMM(ins);
             break;
-        }
+
+        case OP_MOVU:
+            cpu->r[rd] = (CPUJ_IMM(ins) & 0xFFF) << 20;
+            break;
+
+        case OP_ADD: do_alu(cpu, OP_ADD, rd, cpu->r[rs]); break;
+        case OP_ADDI: do_alu(cpu, OP_ADD, rd, CPUJ_IMM(ins)); break;
+        case OP_SUB: do_alu(cpu, OP_SUB, rd, cpu->r[rs]); break;
+        case OP_SUBI: do_alu(cpu, OP_SUB, rd, CPUJ_IMM(ins)); break;
+        case OP_AND: do_alu(cpu, OP_AND, rd, cpu->r[rs]); break;
+        case OP_ANDI: do_alu(cpu, OP_AND, rd, CPUJ_IMM(ins)); break;
+        case OP_OR: do_alu(cpu, OP_OR, rd, cpu->r[rs]); break;
+        case OP_ORI: do_alu(cpu, OP_OR, rd, CPUJ_IMM(ins)); break;
+        case OP_XOR: do_alu(cpu, OP_XOR, rd, cpu->r[rs]); break;
+        case OP_XORI: do_alu(cpu, OP_XOR, rd, CPUJ_IMM(ins)); break;
+        case OP_CMP: do_alu(cpu, OP_CMP, rd, cpu->r[rs]); break;
+        case OP_CMPI: do_alu(cpu, OP_CMP, rd, CPUJ_IMM(ins)); break;
 
         case OP_NOT:
-            cpu->r[rd] = cpuj_alu(cpu, OP_NOT, cpu->r[rd], 0);
+            do_alu(cpu, OP_NOT, rd, 0);
             break;
 
-        case OP_SHL:
-        case OP_SHR:
-            cpu->r[rd] = cpuj_alu(cpu, op, cpu->r[rd], (uint16_t)(islong ? wide & 15 : imm & 15));
+        case OP_SHL: case OP_SHLI:
+            do_alu(cpu, OP_SHL, rd, (op == OP_SHLI) ? CPUJ_IMM(ins) : cpu->r[rs]);
+            break;
+        case OP_SHR: case OP_SHRI:
+            do_alu(cpu, OP_SHR, rd, (op == OP_SHRI) ? CPUJ_IMM(ins) : cpu->r[rs]);
             break;
 
-        case OP_LD: {
-            uint16_t addr;
-            if (islong)
-                addr = wide;
-            else
-                addr = (uint16_t)(cpu->r[rs] + reldisp);
-            cpu->r[rd] = cpuj_mem_read(cpu, addr);
+        case OP_LD:
+            cpu->r[rd] = cpuj_mem_read32(cpu, cpu->r[rs] + simm);
             break;
-        }
-        case OP_ST: {
-            uint16_t addr;
-            if (islong)
-                addr = wide;
-            else
-                addr = (uint16_t)(cpu->r[rs] + reldisp);
-            cpuj_mem_write(cpu, addr, (uint8_t)(cpu->r[rd] & 0xFF));
+        case OP_ST:
+            cpuj_mem_write32(cpu, cpu->r[rs] + simm, cpu->r[rd]);
             break;
-        }
+        case OP_LDB:
+            cpu->r[rd] = cpuj_mem_read(cpu, cpu->r[rs] + simm);
+            break;
+        case OP_STB:
+            cpuj_mem_write(cpu, cpu->r[rs] + simm, (uint8_t)(cpu->r[rd] & 0xFF));
+            break;
 
-        case OP_JMP: {
-            if (islong) {
-                if (branch_taken(cpu, rd))
-                    cpu->pc = wide;
-            } else {
-                int cond = rs;
-                if (branch_taken(cpu, cond))
-                    cpu->pc = (uint16_t)(cpu->pc + reldisp * 2);
-            }
+        case OP_JMP: case OP_JEQ: case OP_JNE:
+        case OP_JGT: case OP_JGE: case OP_JLT: case OP_JLE: {
+            int cond = op - OP_JMP;   /* OP_JMP=ALWAYS .. OP_JLE=LE */
+            if (branch_taken(cpu, cond))
+                cpu->pc += (uint32_t)simm;
             break;
         }
 
-        case OP_MISC:
-            if (imm == IMM_LONG) {           /* CALL abs16 */
-                cpuj_push16(cpu, cpu->pc);
-                cpu->pc = wide;
-            } else {
-                switch (imm) {
-                    case MISC_PUSH:
-                        cpuj_push16(cpu, cpu->r[rd]);
-                        break;
-                    case MISC_POP:
-                        cpu->r[rd] = cpuj_pop16(cpu);
-                        break;
-                    case MISC_CALL:          /* call Rs (indirect) */
-                        cpuj_push16(cpu, cpu->pc);
-                        cpu->pc = cpu->r[rs];
-                        break;
-                    case MISC_RET:
-                        cpu->pc = cpuj_pop16(cpu);
-                        break;
-                    case MISC_TRAP:
-                        cpuj_trap(cpu, rs);  /* trap code in rs field */
-                        break;
-                    case MISC_HALT:
-                        cpu->halted = true;
-                        break;
-                    case MISC_NOP:
-                        break;
-                    default:
-                        break;
-                }
-            }
+        case OP_JMPR:
+            cpu->pc = cpu->r[rs];
+            break;
+
+        case OP_CALL:
+            cpuj_push(cpu, cpu->pc);
+            cpu->pc += (uint32_t)simm;
+            break;
+
+        case OP_CALLR:
+            cpuj_push(cpu, cpu->pc);
+            cpu->pc = cpu->r[rs];
+            break;
+
+        case OP_PUSH:
+            cpuj_push(cpu, cpu->r[rd]);
+            break;
+        case OP_POP:
+            cpu->r[rd] = cpuj_pop(cpu);
+            break;
+        case OP_RET:
+            cpu->pc = cpuj_pop(cpu);
+            break;
+        case OP_TRAP:
+            cpuj_trap(cpu, rd);   /* trap code lives in rd field */
+            break;
+        case OP_HALT:
+            cpu->halted = true;
+            break;
+        case OP_NOP:
             break;
 
         default:
@@ -270,8 +282,7 @@ void cpuj_execute(cpuj_t *cpu, uint32_t instr) {
 
 void cpuj_tick(cpuj_t *cpu) {
     if (cpu->halted) return;
-    uint32_t instr = cpuj_fetch(cpu);
-    cpuj_execute(cpu, instr);
+    cpuj_execute(cpu, cpuj_fetch(cpu));
 }
 
 /* ── Disassembler ──────────────────────────────────────────────────── */
@@ -290,77 +301,75 @@ static int emit(char *buf, int bufsize, int n, const char *fmt, ...) {
     return n + w;
 }
 
-static const char *cond_name(int c) {
-    static const char *n[8] = { "JMP","JEQ","JNE","JGT","JGE","JLT","JLE","?" };
-    return (c >= 0 && c < 8) ? n[c] : "?";
-}
-
-int cpuj_disassemble(uint32_t instr, char *buf, int bufsize) {
-    int op = CPUJ_OP(instr), rd = CPUJ_RD(instr), rs = CPUJ_RS(instr);
-    int imm = CPUJ_IMM(instr);
-    uint16_t wide = CPUJ_WIDE(instr);
-    bool islong = (imm == IMM_LONG);
+int cpuj_disassemble(uint32_t ins, char *buf, int bufsize) {
+    int op = CPUJ_OP(ins), rd = CPUJ_RD(ins), rs = CPUJ_RS(ins);
+    uint32_t imm = CPUJ_IMM(ins);
+    int32_t simm = CPUJ_SIMM(ins);
     int n = 0;
 
     switch (op) {
-        case OP_MOV:
-            if (islong)
-                n = emit(buf, bufsize, n, "MOVI %s, #%u", reg_name(rd), wide);
-            else
-                n = emit(buf, bufsize, n, "MOV %s, %s", reg_name(rd), reg_name(rs));
-            break;
-        case OP_ADD: case OP_SUB: case OP_AND: case OP_OR: case OP_XOR: case OP_CMP: {
-            const char *mn = op==OP_ADD?"ADD":op==OP_SUB?"SUB":op==OP_AND?"AND":op==OP_OR?"OR":op==OP_XOR?"XOR":"CMP";
-            if (islong)
-                n = emit(buf, bufsize, n, "%s %s, #%u", mn, reg_name(rd), wide);
-            else
+        case OP_MOV:  n = emit(buf, bufsize, n, "MOV %s, %s", reg_name(rd), reg_name(rs)); break;
+        case OP_MOVI: n = emit(buf, bufsize, n, "MOVI %s, #%u", reg_name(rd), imm); break;
+        case OP_MOVU: n = emit(buf, bufsize, n, "MOVU %s, #%u", reg_name(rd), imm & 0xFFF); break;
+
+        case OP_ADD: case OP_ADDI: case OP_SUB: case OP_SUBI:
+        case OP_AND: case OP_ANDI: case OP_OR: case OP_ORI:
+        case OP_XOR: case OP_XORI: case OP_CMP: case OP_CMPI: {
+            static const char *tab[17] = {
+                [0]  = "ADD", [1]  = "ADDI", [2] = "SUB", [3] = "SUBI",
+                [4]  = "AND", [5]  = "ANDI", [6] = "OR",  [7] = "ORI",
+                [8]  = "XOR", [9]  = "XORI",
+                [15] = "CMP", [16] = "CMPI",
+            };
+            const char *mn = tab[op - OP_ADD];
+            if (op == OP_ADD || op == OP_SUB || op == OP_AND ||
+                op == OP_OR  || op == OP_XOR || op == OP_CMP)
                 n = emit(buf, bufsize, n, "%s %s, %s", mn, reg_name(rd), reg_name(rs));
+            else
+                n = emit(buf, bufsize, n, "%s %s, #%u", mn, reg_name(rd), imm);
             break;
         }
+
         case OP_NOT:
             n = emit(buf, bufsize, n, "NOT %s", reg_name(rd));
             break;
-        case OP_SHL:
-        case OP_SHR:
-            n = emit(buf, bufsize, n, "%s %s, #%u", op==OP_SHL?"SHL":"SHR", reg_name(rd),
-                     (int)(islong ? wide & 15 : imm & 15));
-            break;
-        case OP_LD:
-        case OP_ST: {
-            const char *mn = op==OP_LD?"LD":"ST";
-            if (islong) {
-                if (op==OP_LD)
-                    n = emit(buf, bufsize, n, "LD %s, [0x%04X]", reg_name(rd), wide);
-                else
-                    n = emit(buf, bufsize, n, "ST [0x%04X], %s", wide, reg_name(rd));
-            } else {
-                int off = (imm<32) ? imm : imm-64;
-                n = emit(buf, bufsize, n, "%s %s, [%s%+d]", mn, reg_name(rd), reg_name(rs), off);
-            }
+
+        case OP_SHL: case OP_SHLI: case OP_SHR: case OP_SHRI: {
+            const char *mn = (op == OP_SHL || op == OP_SHLI) ? "SHL" : "SHR";
+            if (op == OP_SHL || op == OP_SHR)
+                n = emit(buf, bufsize, n, "%s %s, %s", mn, reg_name(rd), reg_name(rs));
+            else
+                n = emit(buf, bufsize, n, "%sI %s, #%u", mn, reg_name(rd), imm & 31);
             break;
         }
-        case OP_JMP:
-            if (islong)
-                n = emit(buf, bufsize, n, "%s 0x%04X", cond_name(rd), wide);
+
+        case OP_LD: case OP_ST: case OP_LDB: case OP_STB: {
+            const char *mn = op == OP_LD ? "LD" : op == OP_ST ? "ST" :
+                             op == OP_LDB ? "LDB" : "STB";
+            if (op == OP_LD || op == OP_LDB)
+                n = emit(buf, bufsize, n, "%s %s, [%s%+d]", mn, reg_name(rd), reg_name(rs), simm);
             else
-                n = emit(buf, bufsize, n, "%s %+d", cond_name(rs),
-                         (int)((imm<32)?imm:imm-64));
+                n = emit(buf, bufsize, n, "%s [%s%+d], %s", mn, reg_name(rs), simm, reg_name(rd));
             break;
-        case OP_MISC:
-            if (islong)
-                n = emit(buf, bufsize, n, "CALL 0x%04X", wide);
-            else
-                switch (imm) {
-                    case MISC_PUSH: n = emit(buf, bufsize, n, "PUSH %s", reg_name(rd)); break;
-                    case MISC_POP:  n = emit(buf, bufsize, n, "POP %s", reg_name(rd)); break;
-                    case MISC_CALL: n = emit(buf, bufsize, n, "CALL %s", reg_name(rs)); break;
-                    case MISC_RET:  n = emit(buf, bufsize, n, "RET"); break;
-                    case MISC_TRAP: n = emit(buf, bufsize, n, "TRAP %d", rs); break;
-                    case MISC_HALT: n = emit(buf, bufsize, n, "HALT"); break;
-                    case MISC_NOP:  n = emit(buf, bufsize, n, "NOP"); break;
-                    default: n = emit(buf, bufsize, n, "??"); break;
-                }
+        }
+
+        case OP_JMP: case OP_JEQ: case OP_JNE:
+        case OP_JGT: case OP_JGE: case OP_JLT: case OP_JLE: {
+            static const char *mn[7] = { "JMP","JEQ","JNE","JGT","JGE","JLT","JLE" };
+            n = emit(buf, bufsize, n, "%s %+d", mn[op - OP_JMP], simm);
             break;
+        }
+        case OP_JMPR:  n = emit(buf, bufsize, n, "JMPR %s", reg_name(rs)); break;
+        case OP_CALL:  n = emit(buf, bufsize, n, "CALL %+d", simm); break;
+        case OP_CALLR: n = emit(buf, bufsize, n, "CALLR %s", reg_name(rs)); break;
+
+        case OP_PUSH:  n = emit(buf, bufsize, n, "PUSH %s", reg_name(rd)); break;
+        case OP_POP:   n = emit(buf, bufsize, n, "POP %s", reg_name(rd)); break;
+        case OP_RET:   n = emit(buf, bufsize, n, "RET"); break;
+        case OP_TRAP:  n = emit(buf, bufsize, n, "TRAP %d", rd); break;
+        case OP_HALT:  n = emit(buf, bufsize, n, "HALT"); break;
+        case OP_NOP:   n = emit(buf, bufsize, n, "NOP"); break;
+
         default:
             n = emit(buf, bufsize, n, "??");
             break;

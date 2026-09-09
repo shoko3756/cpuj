@@ -9,7 +9,7 @@
 
 static void usage(const char *prog) {
     fprintf(stderr,
-        "cpuj — 16-bit virtual CPU\n\n"
+        "cpuj — 32-bit virtual CPU\n\n"
         "usage:\n"
         "  %s <file.asm>              assemble and run\n"
         "  %s <file.asm> -d           assemble and run under debugger\n"
@@ -52,7 +52,10 @@ int main(int argc, char **argv) {
     if (!path) { usage(argv[0]); return 1; }
 
     cpuj_t cpu;
-    cpuj_init(&cpu);
+    if (!cpuj_init(&cpu)) {
+        fprintf(stderr, "cannot allocate 4 GiB of RAM\n");
+        return 1;
+    }
 
     asm_result_t prog;
     bool have_prog = false;
@@ -60,10 +63,10 @@ int main(int argc, char **argv) {
     if (raw) {
         long len = 0;
         char *data = read_file(path, &len);
-        if (!data) { fprintf(stderr, "cannot open %s\n", path); return 1; }
-        if (len > CPUJ_RAM_SIZE) len = CPUJ_RAM_SIZE;
+        if (!data) { fprintf(stderr, "cannot open %s\n", path); cpuj_free(&cpu); return 1; }
+        if ((size_t)len > CPUJ_RAM_SIZE) len = (long)CPUJ_RAM_SIZE;
         for (long i = 0; i < len; i++)
-            cpuj_mem_write(&cpu, (uint16_t)i, (uint8_t)data[i]);
+            cpuj_mem_write(&cpu, (uint32_t)i, (uint8_t)data[i]);
         free(data);
         printf("loaded %ld bytes of raw binary\n", len);
     } else {
@@ -75,7 +78,7 @@ int main(int argc, char **argv) {
             embedded = true;
         } else {
             char *f = read_file(path, &len);
-            if (!f) { fprintf(stderr, "cannot open %s\n", path); return 1; }
+            if (!f) { fprintf(stderr, "cannot open %s\n", path); cpuj_free(&cpu); return 1; }
             src = f;
         }
         if (!asm_assemble(src, &prog)) {
@@ -87,7 +90,7 @@ int main(int argc, char **argv) {
         have_prog = true;
 
         for (int i = 0; i < prog.nbytes; i++)
-            cpuj_mem_write(&cpu, (uint16_t)i, prog.code[i]);
+            cpuj_mem_write(&cpu, (uint32_t)i, prog.code[i]);
         printf("assembled %d bytes from %s\n", prog.nbytes, embedded ? "embedded sh" : path);
     }
 
@@ -99,7 +102,7 @@ int main(int argc, char **argv) {
         long max_ticks = 1 << 20;
         long ticks = 0;
         while (!cpu.halted && ticks < max_ticks) {
-            if (have_prog && cpu.pc >= (uint16_t)prog.nbytes) {
+            if (have_prog && cpu.pc >= (uint32_t)prog.nbytes) {
                 cpu.halted = true;
                 break;
             }
@@ -116,5 +119,6 @@ int main(int argc, char **argv) {
         }
     }
 
+    cpuj_free(&cpu);
     return 0;
 }

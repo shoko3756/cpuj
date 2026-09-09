@@ -25,32 +25,32 @@ static void set_err(asm_result_t *res, const char *fmt, ...) {
 /* ── Number / token parsing ────────────────────────────────────────── */
 
 /* Number token: strips leading '#', allows hex/0b/octal/dec and a sign.
- * Range -32768..65535. Returns false on garbage. */
-static bool parse_num(const char *tok, long *out) {
+ * Accepts any 32-bit quantity (INT32_MIN..UINT32_MAX). */
+static bool parse_num(const char *tok, int64_t *out) {
     while (*tok == ' ' || *tok == '\t') tok++;
     if (*tok == '#') tok++;
     if (*tok == '\0') return false;
 
     const char *p = tok;
-    long sign = 1;
+    int64_t sign = 1;
     if (*p == '-') { sign = -1; p++; }
     else if (*p == '+') p++;
 
     char *end = NULL;
-    long v;
+    long long v;
     if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
-        v = strtol(p + 2, &end, 16);
+        v = strtoll(p + 2, &end, 16);
     else if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B'))
-        v = strtol(p + 2, &end, 2);
+        v = strtoll(p + 2, &end, 2);
     else if (p[0] == '0' && p[1] != '\0')
-        v = strtol(p, &end, 8);
+        v = strtoll(p, &end, 8);
     else
-        v = strtol(p, &end, 10);
+        v = strtoll(p, &end, 10);
 
     if (end == p || *end != '\0') return false;
     v *= sign;
-    if (v < -32768 || v > 65535) return false;
-    *out = v;
+    if (v < INT32_MIN || v > UINT32_MAX) return false;
+    *out = (int64_t)v;
     return true;
 }
 
@@ -66,7 +66,7 @@ static bool is_reg(const char *tok, int *reg) {
 typedef struct {
     int kind;               /* 0=reg, 1=imm, 2=label */
     int reg;
-    long imm;
+    int64_t imm;
     char label[ASM_MAX_LABEL];
 } opr_t;
 
@@ -90,15 +90,11 @@ static bool parse_opr(const char *tok, opr_t *o) {
     return false;
 }
 
-/* Memory operand "[...]" → base register + offset, or absolute (num/@label). */
+/* Memory operand "[Rbase+off]" (a register base is required; there is
+ * no absolute-addressing form — load the base with MOVI/MOVU first). */
 typedef struct {
-    int             is_base;    /* base + offset form */
-    int             base;
-    long            off;
-    int             is_abs_num;
-    long            abs;
-    int             is_abs_label;
-    char            label[ASM_MAX_LABEL];
+    int  base;
+    int64_t off;
 } memopr_t;
 
 static bool parse_memopr(const char *tok, memopr_t *m) {
@@ -116,43 +112,34 @@ static bool parse_memopr(const char *tok, memopr_t *m) {
     p++;
     while (*p) { if (*p != ' ' && *p != '\t') return false; p++; }
 
-    memset(m, 0, sizeof *m);
-
-    if (buf[0] == 'R' || buf[0] == 'r') {
-        char comp[16];
-        size_t clen = 0;
-        const char *q = buf;
-        while (*q && !isspace((unsigned char)*q) && *q != '+' && *q != '-'
-               && clen < sizeof comp - 1)
-            comp[clen++] = *q++;
-        comp[clen] = '\0';
-        int base;
-        if (!is_reg(comp, &base)) return false;
-        m->is_base = 1;
-        m->base = base;
-        m->off = 0;
-        while (isspace((unsigned char)*q)) q++;
-        if (*q == '\0') return true;
-        if (!parse_num(q, &m->off)) return false;
-        return true;
-    }
-    if (buf[0] == '@') {
-        m->is_abs_label = 1;
-        snprintf(m->label, sizeof m->label, "%s", buf + 1);
-        return true;
-    }
-    if (parse_num(buf, &m->abs)) { m->is_abs_num = 1; return true; }
-    return false;
+    char comp[16];
+    size_t clen = 0;
+    const char *q = buf;
+    while (*q && !isspace((unsigned char)*q) && *q != '+' && *q != '-'
+           && clen < sizeof comp - 1)
+        comp[clen++] = *q++;
+    comp[clen] = '\0';
+    int base;
+    if (!is_reg(comp, &base)) return false;
+    m->base = base;
+    m->off = 0;
+    while (isspace((unsigned char)*q)) q++;
+    if (*q == '\0') return true;
+    if (!parse_num(q, &m->off)) return false;
+    return true;
 }
 
 /* ── Instruction lines ─────────────────────────────────────────────── */
 
 typedef enum {
-    LN_MOV, LN_MOVI, LN_ADD, LN_SUB, LN_AND, LN_OR, LN_XOR,
-    LN_NOT, LN_SHL, LN_SHR, LN_CMP,
-    LN_LD, LN_ST,
+    LN_MOV, LN_MOVI, LN_MOVU,
+    LN_ADD, LN_ADDI, LN_SUB, LN_SUBI, LN_AND, LN_ANDI,
+    LN_OR, LN_ORI, LN_XOR, LN_XORI, LN_CMP, LN_CMPI,
+    LN_NOT, LN_SHL, LN_SHLI, LN_SHR, LN_SHRI,
+    LN_LD, LN_ST, LN_LDB, LN_STB,
     LN_JMP, LN_JEQ, LN_JNE, LN_JGT, LN_JGE, LN_JLT, LN_JLE,
-    LN_CALL, LN_PUSH, LN_POP, LN_RET, LN_TRAP, LN_HALT, LN_NOP
+    LN_JMPR, LN_CALL, LN_CALLR,
+    LN_PUSH, LN_POP, LN_RET, LN_TRAP, LN_HALT, LN_NOP
 } ln_kind_t;
 
 typedef struct {
@@ -163,10 +150,9 @@ typedef struct {
     char      ops[MAXTOKS][ASM_MAX_LABEL];
     int       nops;
     int       lineno;
-    long      target;       /* resolved absolute target / imm */
-    int       long_flag;    /* emit in 32-bit long form */
-    uint16_t  addr;         /* byte address of instruction start */
-    uint16_t  next;         /* byte address after the instruction */
+    uint32_t  target;       /* resolved absolute target (for branches) */
+    uint32_t  addr;         /* byte address of instruction start */
+    uint32_t  next;         /* byte address after the instruction */
 } ln_t;
 
 static ln_t lines[MAXLINES];
@@ -195,14 +181,14 @@ static int tokenize(const char *line, char (*toks)[ASM_MAX_LABEL], int maxtoks) 
     return n;
 }
 
-static bool find_label(const char *name, uint16_t *addr) {
+static bool find_label(const char *name, uint32_t *addr) {
     for (int i = 0; i < nlabels; i++)
         if (strcmp(labels[i].name, name) == 0) { *addr = labels[i].addr; return true; }
     return false;
 }
 
-static bool add_label(const char *name, uint16_t addr, asm_result_t *res) {
-    uint16_t tmp;
+static bool add_label(const char *name, uint32_t addr, asm_result_t *res) {
+    uint32_t tmp;
     if (find_label(name, &tmp)) {
         set_err(res, "duplicate label '@%s'", name);
         return false;
@@ -217,19 +203,21 @@ static bool add_label(const char *name, uint16_t addr, asm_result_t *res) {
     return true;
 }
 
+#define LN_TAB(x) { #x, LN_##x }
+
 static bool kind_from_name(const char *mn, ln_kind_t *k) {
     struct { const char *name; ln_kind_t k; } tab[] = {
-        { "MOV", LN_MOV }, { "MOVI", LN_MOVI },
-        { "ADD", LN_ADD }, { "SUB", LN_SUB }, { "AND", LN_AND },
-        { "OR", LN_OR }, { "XOR", LN_XOR }, { "CMP", LN_CMP },
-        { "NOT", LN_NOT }, { "SHL", LN_SHL }, { "SHR", LN_SHR },
-        { "LD", LN_LD }, { "ST", LN_ST },
-        { "JMP", LN_JMP }, { "JEQ", LN_JEQ }, { "JNE", LN_JNE },
-        { "JGT", LN_JGT }, { "JGE", LN_JGE }, { "JLT", LN_JLT },
-        { "JLE", LN_JLE },
-        { "CALL", LN_CALL }, { "PUSH", LN_PUSH }, { "POP", LN_POP },
-        { "RET", LN_RET }, { "TRAP", LN_TRAP }, { "HALT", LN_HALT },
-        { "NOP", LN_NOP },
+        LN_TAB(MOV), LN_TAB(MOVI), LN_TAB(MOVU),
+        LN_TAB(ADD), LN_TAB(ADDI), LN_TAB(SUB), LN_TAB(SUBI),
+        LN_TAB(AND), LN_TAB(ANDI), LN_TAB(OR), LN_TAB(ORI),
+        LN_TAB(XOR), LN_TAB(XORI), LN_TAB(CMP), LN_TAB(CMPI),
+        LN_TAB(NOT), LN_TAB(SHL), LN_TAB(SHLI), LN_TAB(SHR), LN_TAB(SHRI),
+        LN_TAB(LD), LN_TAB(ST), LN_TAB(LDB), LN_TAB(STB),
+        LN_TAB(JMP), LN_TAB(JEQ), LN_TAB(JNE), LN_TAB(JGT),
+        LN_TAB(JGE), LN_TAB(JLT), LN_TAB(JLE),
+        LN_TAB(JMPR), LN_TAB(CALL), LN_TAB(CALLR),
+        LN_TAB(PUSH), LN_TAB(POP), LN_TAB(RET), LN_TAB(TRAP),
+        LN_TAB(HALT), LN_TAB(NOP),
     };
     for (size_t i = 0; i < sizeof tab / sizeof tab[0]; i++)
         if (strcasecmp(mn, tab[i].name) == 0) { *k = tab[i].k; return true; }
@@ -237,60 +225,40 @@ static bool kind_from_name(const char *mn, ln_kind_t *k) {
 }
 
 static const char *mnemonics[LN_NOP + 1] = {
-    [LN_MOV] = "MOV", [LN_MOVI] = "MOVI",
-    [LN_ADD] = "ADD", [LN_SUB] = "SUB", [LN_AND] = "AND",
-    [LN_OR] = "OR", [LN_XOR] = "XOR", [LN_CMP] = "CMP",
-    [LN_NOT] = "NOT", [LN_SHL] = "SHL", [LN_SHR] = "SHR",
-    [LN_LD] = "LD", [LN_ST] = "ST",
+    [LN_MOV] = "MOV", [LN_MOVI] = "MOVI", [LN_MOVU] = "MOVU",
+    [LN_ADD] = "ADD", [LN_ADDI] = "ADDI", [LN_SUB] = "SUB",
+    [LN_SUBI] = "SUBI", [LN_AND] = "AND", [LN_ANDI] = "ANDI",
+    [LN_OR] = "OR", [LN_ORI] = "ORI", [LN_XOR] = "XOR",
+    [LN_XORI] = "XORI", [LN_CMP] = "CMP", [LN_CMPI] = "CMPI",
+    [LN_NOT] = "NOT", [LN_SHL] = "SHL", [LN_SHLI] = "SHLI",
+    [LN_SHR] = "SHR", [LN_SHRI] = "SHRI",
+    [LN_LD] = "LD", [LN_ST] = "ST", [LN_LDB] = "LDB", [LN_STB] = "STB",
     [LN_JMP] = "JMP", [LN_JEQ] = "JEQ", [LN_JNE] = "JNE",
     [LN_JGT] = "JGT", [LN_JGE] = "JGE", [LN_JLT] = "JLT",
-    [LN_JLE] = "JLE",
-    [LN_CALL] = "CALL", [LN_PUSH] = "PUSH", [LN_POP] = "POP",
+    [LN_JLE] = "JLE", [LN_JMPR] = "JMPR", [LN_CALL] = "CALL",
+    [LN_CALLR] = "CALLR", [LN_PUSH] = "PUSH", [LN_POP] = "POP",
     [LN_RET] = "RET", [LN_TRAP] = "TRAP", [LN_HALT] = "HALT",
     [LN_NOP] = "NOP",
 };
 
 static int operand_need(ln_kind_t k) {
     switch (k) {
-        case LN_MOV: case LN_MOVI: case LN_ADD: case LN_SUB:
-        case LN_AND: case LN_OR: case LN_XOR: case LN_CMP:
-        case LN_SHL: case LN_SHR: case LN_LD: case LN_ST:
+        case LN_MOV: case LN_MOVI: case LN_MOVU:
+        case LN_ADD: case LN_ADDI: case LN_SUB: case LN_SUBI:
+        case LN_AND: case LN_ANDI: case LN_OR: case LN_ORI:
+        case LN_XOR: case LN_XORI: case LN_CMP: case LN_CMPI:
+        case LN_SHL: case LN_SHLI: case LN_SHR: case LN_SHRI:
+        case LN_LD: case LN_ST: case LN_LDB: case LN_STB:
             return 2;
-        case LN_NOT: case LN_PUSH: case LN_POP:
-        case LN_JMP: case LN_JEQ: case LN_JNE: case LN_JGT:
-        case LN_JGE: case LN_JLT: case LN_JLE:
-        case LN_CALL: case LN_TRAP:
+        case LN_NOT: case LN_JMP: case LN_JEQ: case LN_JNE:
+        case LN_JGT: case LN_JGE: case LN_JLT: case LN_JLE:
+        case LN_JMPR: case LN_CALL: case LN_CALLR:
+        case LN_PUSH: case LN_POP: case LN_TRAP:
             return 1;
         case LN_RET: case LN_HALT: case LN_NOP:
             return 0;
     }
     return -1;
-}
-
-/* Instructions whose operands force the 32-bit long form. */
-static bool instr_always_long(const ln_t *ln) {
-    opr_t o;
-    memopr_t m;
-    switch (ln->kind) {
-        case LN_CALL:
-            if (ln->nops < 1) return false;
-            if (!parse_opr(ln->ops[0], &o)) return false;
-            return o.kind != 0;      /* reg-indirect call is short */
-        case LN_MOV: case LN_MOVI:
-        case LN_ADD: case LN_SUB: case LN_AND:
-        case LN_OR: case LN_XOR: case LN_CMP:
-            if (ln->nops < 2) return false;
-            if (!parse_opr(ln->ops[1], &o)) return false;
-            return o.kind != 0;      /* immediate or @label => long form */
-        case LN_LD: case LN_ST: {
-            int mi = (ln->kind == LN_LD) ? 1 : 0;
-            if (ln->nops < 2) return false;
-            if (!parse_memopr(ln->ops[mi], &m)) return false;
-            return !m.is_base;       /* absolute address => long form */
-        }
-        default:
-            return false;
-    }
 }
 
 /* Parse a line into `ln`. Tokens exclude a leading label. */
@@ -309,7 +277,31 @@ static bool parse_instr(ln_t *ln, int ntoks, char (*toks)[ASM_MAX_LABEL], asm_re
     for (int i = 1; i < ntoks; i++)
         snprintf(ln->ops[i - 1], ASM_MAX_LABEL, "%s", toks[i]);
     ln->nops = ntoks - 1;
-    ln->long_flag = instr_always_long(ln) ? 1 : 0;
+    return true;
+}
+
+/* Resolve a branch target operand to an absolute address. */
+static bool branch_target(const ln_t *ln, uint32_t *out, asm_result_t *res) {
+    opr_t o;
+    if (!parse_opr(ln->ops[0], &o)) {
+        set_err(res, "bad branch target");
+        return false;
+    }
+    if (o.kind == 0) {
+        set_err(res, "%s expects a label or address, not a register "
+                     "(use JMPR for register jumps)", mnemonics[ln->kind]);
+        return false;
+    }
+    if (o.kind == 1) {
+        *out = (uint32_t)o.imm;
+        return true;
+    }
+    uint32_t t;
+    if (!find_label(o.label, &t)) {
+        set_err(res, "unknown label '@%s'", o.label);
+        return false;
+    }
+    *out = t;
     return true;
 }
 
@@ -370,66 +362,33 @@ bool asm_assemble(const char *source, asm_result_t *res) {
         }
     }
 
-    /* Pass 2: fixed-point address/label resolution.
-     * Jumps to labels default to short relative form; a target out of the
-     * ±31-word range (or whose rel would equal the long-form marker -1)
-     * widens the jump to the 32-bit absolute form, then sizes are
-     * recomputed until the layout is stable. */
+    /* Pass 2: fixed layout (every instruction is 4 bytes) + labels. */
     {
-        int changed = 1;
-        for (int iter = 0; changed && iter < 32; iter++) {
-            changed = 0;
-            uint16_t pc = 0;
-            for (int i = 0; i < nlines; i++) {
-                line_num = lines[i].lineno;
-                ln_t *ln = &lines[i];
-                ln->addr = pc;
-                if (ln->has_label && ln->label[0]) {
-                    if (iter == 0) {
-                        if (!add_label(ln->label, pc, res)) return false;
-                    } else {
-                        for (int k = 0; k < nlabels; k++)
-                            if (strcmp(labels[k].name, ln->label) == 0)
-                                labels[k].addr = pc;
-                    }
-                }
-                int size = ln->has_instr ? (ln->long_flag ? 4 : 2) : 0;
-                if (ln->has_instr)
-                    ln->next = (uint16_t)(pc + size);
-                else
-                    ln->next = pc;
-                pc = (uint16_t)(pc + size);
+        uint32_t pc = 0;
+        for (int i = 0; i < nlines; i++) {
+            line_num = lines[i].lineno;
+            ln_t *ln = &lines[i];
+            ln->addr = pc;
+            if (ln->has_label && ln->label[0]) {
+                if (!add_label(ln->label, pc, res)) return false;
             }
+            ln->next = pc + (ln->has_instr ? 4 : 0);
+            pc = ln->next;
+        }
 
-            for (int i = 0; i < nlines; i++) {
-                line_num = lines[i].lineno;
-                ln_t *ln = &lines[i];
-                int is_jump = (ln->kind >= LN_JMP && ln->kind <= LN_JLE);
-                if (!is_jump || ln->nops < 1) continue;
-
-                opr_t o;
-                if (!parse_opr(ln->ops[0], &o)) {
-                    set_err(res, "bad jump target"); return false;
-                }
-                if (o.kind == 2) {
-                    uint16_t t;
-                    if (!find_label(o.label, &t)) {
-                        set_err(res, "unknown label '@%s'", o.label);
-                        return false;
-                    }
-                    ln->target = t;
-                    if (!ln->long_flag) {
-                        int rel = (int)((int16_t)(t - ln->next)) / 2;
-                        if (rel > 31 || rel < -32 || rel == -1) {
-                            ln->long_flag = 1;
-                            changed = 1;
-                        }
-                    }
-                } else if (o.kind == 1) {
-                    /* numeric target = absolute; always long */
-                    ln->target = o.imm & 0xFFFF;
-                    if (!ln->long_flag) { ln->long_flag = 1; changed = 1; }
-                }
+        /* Resolve branch targets and check the ±20-bit range. */
+        for (int i = 0; i < nlines; i++) {
+            line_num = lines[i].lineno;
+            ln_t *ln = &lines[i];
+            int is_branch = (ln->kind >= LN_JMP && ln->kind <= LN_JLE) ||
+                            ln->kind == LN_CALL;
+            if (!is_branch || ln->nops < 1) continue;
+            if (!branch_target(ln, &ln->target, res)) return false;
+            int64_t rel = (int64_t)ln->target - (int64_t)ln->next;
+            if (rel < -524288 || rel > 524287) {
+                set_err(res, "%s target out of ±0x80000-byte range",
+                        mnemonics[ln->kind]);
+                return false;
             }
         }
     }
@@ -439,213 +398,221 @@ bool asm_assemble(const char *source, asm_result_t *res) {
         line_num = lines[i].lineno;
         ln_t *ln = &lines[i];
         if (!ln->has_instr) continue;
-        uint32_t ins;
+        uint32_t ins = 0;
         const char *mn = mnemonics[ln->kind];
 
-        switch (ln->kind) {
-            case LN_MOV: {
-                opr_t o, s;
-                if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
-                    set_err(res, "MOV needs a register destination"); return false;
-                }
-                if (!parse_opr(ln->ops[1], &s)) {
-                    set_err(res, "MOV needs a source"); return false;
-                }
-                if (s.kind == 0) ins = CPUJ_MOV(o.reg, s.reg);
-                else {
-                    long v = s.kind == 1 ? s.imm : 0;
-                    if (s.kind == 2) {
-                        uint16_t t;
-                        if (!find_label(s.label, &t)) { set_err(res, "unknown label '@%s'", s.label); return false; }
-                        v = t;
-                    }
-                    ins = CPUJ_MOVI(o.reg, (uint16_t)v);
-                }
-                break;
-            }
-            case LN_MOVI: {
-                opr_t o, s;
-                if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
-                    set_err(res, "MOVI needs a register"); return false;
-                }
-                if (!parse_opr(ln->ops[1], &s) || s.kind == 0) {
-                    set_err(res, "MOVI expects an immediate"); return false;
-                }
-                long v = s.kind == 1 ? s.imm : 0;
-                if (s.kind == 2) {
-                    uint16_t t;
-                    if (!find_label(s.label, &t)) { set_err(res, "unknown label '@%s'", s.label); return false; }
-                    v = t;
-                }
-                ins = CPUJ_MOVI(o.reg, (uint16_t)v);
-                break;
-            }
-            case LN_ADD: case LN_SUB: case LN_AND:
-            case LN_OR: case LN_XOR: case LN_CMP: {
-                int op = OP_ADD;
-                if (ln->kind == LN_SUB) op = OP_SUB;
-                else if (ln->kind == LN_AND) op = OP_AND;
-                else if (ln->kind == LN_OR) op = OP_OR;
-                else if (ln->kind == LN_XOR) op = OP_XOR;
-                else if (ln->kind == LN_CMP) op = OP_CMP;
+        opr_t o, s;
+        memopr_t m;
 
-                opr_t o, s;
+        switch (ln->kind) {
+            case LN_MOV:
+            case LN_MOVI: {
                 if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
                     set_err(res, "%s needs a register destination", mn); return false;
                 }
-                if (!parse_opr(ln->ops[1], &s) || s.kind == 2) {
-                    set_err(res, "%s needs a register or immediate source", mn); return false;
+                if (!parse_opr(ln->ops[1], &s)) {
+                    set_err(res, "%s needs a source", mn); return false;
                 }
-                if (s.kind == 0) {
-                    switch (op) {
-                        case OP_ADD: ins = CPUJ_ADD(o.reg, s.reg); break;
-                        case OP_SUB: ins = CPUJ_SUB(o.reg, s.reg); break;
-                        case OP_AND: ins = CPUJ_AND(o.reg, s.reg); break;
-                        case OP_OR:  ins = CPUJ_OR(o.reg, s.reg); break;
-                        case OP_XOR: ins = CPUJ_XOR(o.reg, s.reg); break;
-                        default:     ins = CPUJ_CMP(o.reg, s.reg); break;
-                    }
+                if (ln->kind == LN_MOV && s.kind == 0) {
+                    ins = CPUJ_MOV(o.reg, s.reg);
                 } else {
-                    switch (op) {
-                        case OP_ADD: ins = CPUJ_ADDI(o.reg, (uint16_t)s.imm); break;
-                        case OP_SUB: ins = CPUJ_SUBI(o.reg, (uint16_t)s.imm); break;
-                        case OP_AND: ins = CPUJ_ANDI(o.reg, (uint16_t)s.imm); break;
-                        case OP_OR:  ins = CPUJ_ORI(o.reg, (uint16_t)s.imm); break;
-                        case OP_XOR: ins = CPUJ_XORI(o.reg, (uint16_t)s.imm); break;
-                        default:     ins = CPUJ_CMPI(o.reg, (uint16_t)s.imm); break;
+                    int64_t v;
+                    if (s.kind == 2) {
+                        uint32_t t;
+                        if (!find_label(s.label, &t)) { set_err(res, "unknown label '@%s'", s.label); return false; }
+                        v = t;
+                    } else if (s.kind == 1) {
+                        v = s.imm;
+                    } else {
+                        set_err(res, "MOVI expects an immediate or label"); return false;
                     }
+                    if (v < 0 || v > 0xFFFFF) {
+                        set_err(res, "%s immediate must be 0..0xFFFFF", mn); return false;
+                    }
+                    ins = CPUJ_MOVI(o.reg, (uint32_t)v);
                 }
                 break;
             }
+
+            case LN_MOVU: {
+                if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
+                    set_err(res, "MOVU needs a register destination"); return false;
+                }
+                if (!parse_opr(ln->ops[1], &s) || s.kind != 1) {
+                    set_err(res, "MOVU expects an immediate"); return false;
+                }
+                if (s.imm < 0 || s.imm > 0xFFF) {
+                    set_err(res, "MOVU value must be 0..0xFFF"); return false;
+                }
+                ins = CPUJ_MOVU(o.reg, (uint32_t)s.imm);
+                break;
+            }
+
+            case LN_ADD: case LN_ADDI: case LN_SUB: case LN_SUBI:
+            case LN_AND: case LN_ANDI: case LN_OR: case LN_ORI:
+            case LN_XOR: case LN_XORI: case LN_CMP: case LN_CMPI: {
+                int op = OP_ADD;
+                int isi = 0;
+                switch (ln->kind) {
+                    case LN_ADD:  op = OP_ADD; break;
+                    case LN_ADDI: op = OP_ADD; isi = 1; break;
+                    case LN_SUB:  op = OP_SUB; break;
+                    case LN_SUBI: op = OP_SUB; isi = 1; break;
+                    case LN_AND:  op = OP_AND; break;
+                    case LN_ANDI: op = OP_AND; isi = 1; break;
+                    case LN_OR:   op = OP_OR; break;
+                    case LN_ORI:  op = OP_OR; isi = 1; break;
+                    case LN_XOR:  op = OP_XOR; break;
+                    case LN_XORI: op = OP_XOR; isi = 1; break;
+                    case LN_CMP:  op = OP_CMP; break;
+                    default:      op = OP_CMP; isi = 1; break;
+                }
+                if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
+                    set_err(res, "%s needs a register destination", mn); return false;
+                }
+                if (!parse_opr(ln->ops[1], &s)) {
+                    set_err(res, "%s needs a source", mn); return false;
+                }
+                if (s.kind == 1) {
+                    if (s.imm < 0 || s.imm > 0xFFFFF) {
+                        set_err(res, "%s immediate must be 0..0xFFFFF", mn); return false;
+                    }
+                    if (op == OP_ADD) ins = CPUJ_ADDI(o.reg, (uint32_t)s.imm);
+                    else if (op == OP_SUB) ins = CPUJ_SUBI(o.reg, (uint32_t)s.imm);
+                    else if (op == OP_AND) ins = CPUJ_ANDI(o.reg, (uint32_t)s.imm);
+                    else if (op == OP_OR) ins = CPUJ_ORI(o.reg, (uint32_t)s.imm);
+                    else if (op == OP_XOR) ins = CPUJ_XORI(o.reg, (uint32_t)s.imm);
+                    else ins = CPUJ_CMPI(o.reg, (uint32_t)s.imm);
+                } else if (s.kind == 0) {
+                    if (isi) {
+                        set_err(res, "%s expects an immediate (use %s for registers)",
+                                mn, mnemonics[ln->kind - 1]); return false;
+                    }
+                    if (op == OP_ADD) ins = CPUJ_ADD(o.reg, s.reg);
+                    else if (op == OP_SUB) ins = CPUJ_SUB(o.reg, s.reg);
+                    else if (op == OP_AND) ins = CPUJ_AND(o.reg, s.reg);
+                    else if (op == OP_OR) ins = CPUJ_OR(o.reg, s.reg);
+                    else if (op == OP_XOR) ins = CPUJ_XOR(o.reg, s.reg);
+                    else ins = CPUJ_CMP(o.reg, s.reg);
+                } else {
+                    set_err(res, "%s needs a register or immediate source", mn); return false;
+                }
+                break;
+            }
+
             case LN_NOT: {
-                opr_t o;
                 if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
                     set_err(res, "NOT needs a register"); return false;
                 }
                 ins = CPUJ_NOT(o.reg);
                 break;
             }
-            case LN_SHL: case LN_SHR: {
-                opr_t o, s;
+
+            case LN_SHL: case LN_SHLI: case LN_SHR: case LN_SHRI: {
+                int isi = (ln->kind == LN_SHLI || ln->kind == LN_SHRI);
+                int isl = (ln->kind == LN_SHL || ln->kind == LN_SHLI);
                 if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
                     set_err(res, "%s needs a register", mn); return false;
                 }
-                if (!parse_opr(ln->ops[1], &s) || s.kind != 1 || s.imm < 0 || s.imm > 15) {
-                    set_err(res, "shift amount must be 0..15"); return false;
+                if (!parse_opr(ln->ops[1], &s)) {
+                    set_err(res, "%s needs a count", mn); return false;
                 }
-                if (ln->kind == LN_SHL) ins = CPUJ_SHL(o.reg, (int)s.imm);
-                else ins = CPUJ_SHR(o.reg, (int)s.imm);
-                break;
-            }
-            case LN_LD: case LN_ST: {
-                opr_t o;
-                memopr_t m;
-                if (ln->kind == LN_LD) {
-                    if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
-                        set_err(res, "LD needs a register destination"); return false;
+                if (s.kind == 1) {
+                    if (s.imm < 0 || s.imm > 31) {
+                        set_err(res, "shift amount must be 0..31"); return false;
                     }
-                    if (!parse_memopr(ln->ops[1], &m)) {
-                        set_err(res, "LD needs [base+off] or [addr]"); return false;
+                    if (isl) ins = CPUJ_SHLI(o.reg, (uint32_t)s.imm);
+                    else ins = CPUJ_SHRI(o.reg, (uint32_t)s.imm);
+                } else if (s.kind == 0) {
+                    if (isi) {
+                        set_err(res, "%s expects an immediate count", mn); return false;
                     }
-                    if (m.is_base) {
-                        if (m.off < -32 || m.off > 31 || m.off == -1) {
-                            set_err(res, "LD offset must be -32..+31 (not -1)"); return false;
-                        }
-                        ins = CPUJ_LD_OFF(o.reg, m.base, (int)m.off);
-                    } else if (m.is_abs_num) {
-                        ins = CPUJ_LD_ABS16(o.reg, (uint16_t)m.abs);
-                    } else {
-                        uint16_t t;
-                        if (!find_label(m.label, &t)) { set_err(res, "unknown label '@%s'", m.label); return false; }
-                        ins = CPUJ_LD_ABS16(o.reg, t);
-                    }
+                    if (isl) ins = CPUJ_SHL(o.reg, s.reg);
+                    else ins = CPUJ_SHR(o.reg, s.reg);
                 } else {
-                    if (!parse_memopr(ln->ops[0], &m)) {
-                        set_err(res, "ST needs [base+off] or [addr]"); return false;
-                    }
-                    if (!parse_opr(ln->ops[1], &o) || o.kind != 0) {
-                        set_err(res, "ST needs a register source"); return false;
-                    }
-                    if (m.is_base) {
-                        if (m.off < -32 || m.off > 31 || m.off == -1) {
-                            set_err(res, "ST offset must be -32..+31 (not -1)"); return false;
-                        }
-                        ins = CPUJ_ST_OFF(m.base, (int)m.off, o.reg);
-                    } else if (m.is_abs_num) {
-                        ins = CPUJ_ST_ABS16((uint16_t)m.abs, o.reg);
-                    } else {
-                        uint16_t t;
-                        if (!find_label(m.label, &t)) { set_err(res, "unknown label '@%s'", m.label); return false; }
-                        ins = CPUJ_ST_ABS16(t, o.reg);
-                    }
+                    set_err(res, "%s needs a count", mn); return false;
                 }
                 break;
             }
+
+            case LN_LD: case LN_ST: case LN_LDB: case LN_STB: {
+                int is_load = (ln->kind == LN_LD || ln->kind == LN_LDB);
+                int is_byte = (ln->kind == LN_LDB || ln->kind == LN_STB);
+                int mi = is_load ? 1 : 0;
+                if (!parse_memopr(ln->ops[mi], &m)) {
+                    set_err(res, "%s needs a [Rbase+off] operand (no absolute form)",
+                            mn); return false;
+                }
+                if (m.off < -524288 || m.off > 524287) {
+                    set_err(res, "%s offset must be -0x80000..+0x7FFFF", mn); return false;
+                }
+                if (is_load) {
+                    if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
+                        set_err(res, "%s needs a register destination", mn); return false;
+                    }
+                    ins = is_byte ? CPUJ_LDB(o.reg, m.base, (int32_t)m.off)
+                                  : CPUJ_LD(o.reg, m.base, (int32_t)m.off);
+                } else {
+                    if (!parse_opr(ln->ops[1], &o) || o.kind != 0) {
+                        set_err(res, "%s needs a register source", mn); return false;
+                    }
+                    ins = is_byte ? CPUJ_STB(m.base, (int32_t)m.off, o.reg)
+                                  : CPUJ_ST(m.base, (int32_t)m.off, o.reg);
+                }
+                break;
+            }
+
             case LN_JMP: case LN_JEQ: case LN_JNE:
             case LN_JGT: case LN_JGE: case LN_JLT: case LN_JLE: {
-                int cond = JMP_ALWAYS;
-                if (ln->kind == LN_JEQ) cond = JMP_EQ;
-                else if (ln->kind == LN_JNE) cond = JMP_NE;
-                else if (ln->kind == LN_JGT) cond = JMP_GT;
-                else if (ln->kind == LN_JGE) cond = JMP_GE;
-                else if (ln->kind == LN_JLT) cond = JMP_LT;
-                else if (ln->kind == LN_JLE) cond = JMP_LE;
+                int64_t rel = (int64_t)ln->target - (int64_t)ln->next;
+                int op = OP_JMP + (ln->kind - LN_JMP);
+                ins = CPUJ_BR(op, (int32_t)rel);
+                break;
+            }
 
-                if (ln->long_flag) {
-                    ins = CPUJ_JB(cond, (uint16_t)ln->target);
-                } else {
-                    int rel = (int)((int16_t)(ln->target - ln->next)) / 2;
-                    switch (cond) {
-                        case JMP_ALWAYS: ins = CPUJ_JMP(rel); break;
-                        case JMP_EQ: ins = CPUJ_JEQ(rel); break;
-                        case JMP_NE: ins = CPUJ_JNE(rel); break;
-                        case JMP_GT: ins = CPUJ_JGT(rel); break;
-                        case JMP_GE: ins = CPUJ_JGE(rel); break;
-                        case JMP_LT: ins = CPUJ_JLT(rel); break;
-                        default:     ins = CPUJ_JLE(rel); break;
-                    }
+            case LN_JMPR: {
+                if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
+                    set_err(res, "JMPR needs a register"); return false;
                 }
+                ins = CPUJ_JMPR(o.reg);
                 break;
             }
+
             case LN_CALL: {
-                opr_t o;
-                if (!parse_opr(ln->ops[0], &o)) {
-                    set_err(res, "CALL needs a target"); return false;
-                }
-                if (o.kind == 0) {
-                    ins = CPUJ_CALL_REG(o.reg);   /* register-indirect call */
-                    break;
-                }
-                long v = o.kind == 1 ? o.imm : 0;
-                if (o.kind == 2) {
-                    uint16_t t;
-                    if (!find_label(o.label, &t)) { set_err(res, "unknown label '@%s'", o.label); return false; }
-                    v = t;
-                }
-                ins = CPUJ_CALL_ABS((uint16_t)v);
+                int64_t rel = (int64_t)ln->target - (int64_t)ln->next;
+                ins = CPUJ_CALL((int32_t)rel);
                 break;
             }
+
+            case LN_CALLR: {
+                if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
+                    set_err(res, "CALLR needs a register"); return false;
+                }
+                ins = CPUJ_CALLR(o.reg);
+                break;
+            }
+
             case LN_PUSH: {
-                opr_t o;
                 if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
                     set_err(res, "PUSH needs a register"); return false;
                 }
                 ins = CPUJ_PUSH(o.reg);
                 break;
             }
+
             case LN_POP: {
-                opr_t o;
                 if (!parse_opr(ln->ops[0], &o) || o.kind != 0) {
                     set_err(res, "POP needs a register"); return false;
                 }
                 ins = CPUJ_POP(o.reg);
                 break;
             }
+
             case LN_RET:  ins = CPUJ_RET();  break;
             case LN_HALT: ins = CPUJ_HALT(); break;
             case LN_NOP:  ins = CPUJ_NOP();  break;
+
             case LN_TRAP: {
-                opr_t o;
                 int code = -1;
                 if (parse_opr(ln->ops[0], &o) && o.kind == 1) code = (int)o.imm;
                 else {
@@ -662,6 +629,7 @@ bool asm_assemble(const char *source, asm_result_t *res) {
                 ins = CPUJ_TRAP(code);
                 break;
             }
+
             default:
                 set_err(res, "internal: bad instruction"); return false;
         }
@@ -670,14 +638,11 @@ bool asm_assemble(const char *source, asm_result_t *res) {
             set_err(res, "program too large");
             return false;
         }
-        uint16_t w1 = (uint16_t)(ins >> 16);
-        res->code[res->nbytes++] = (uint8_t)(w1 >> 8);
-        res->code[res->nbytes++] = (uint8_t)(w1 & 0xFF);
-        if (CPUJ_IMM(ins) == IMM_LONG) {
-            uint16_t w2 = (uint16_t)(ins & 0xFFFF);
-            res->code[res->nbytes++] = (uint8_t)(w2 >> 8);
-            res->code[res->nbytes++] = (uint8_t)(w2 & 0xFF);
-        }
+        res->code[res->nbytes]     = (uint8_t)(ins >> 24);
+        res->code[res->nbytes + 1] = (uint8_t)(ins >> 16);
+        res->code[res->nbytes + 2] = (uint8_t)(ins >> 8);
+        res->code[res->nbytes + 3] = (uint8_t)ins;
+        res->nbytes += 4;
     }
 
     for (int i = 0; i < nlabels; i++) {
